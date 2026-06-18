@@ -1,0 +1,75 @@
+name: Desplegar apuestas-service en EKS
+
+on:
+  push:
+    branches: [ deploy ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: vidalcasino-eks
+  ECR_REPOSITORY: apuestas-service
+  IMAGE_VERSION: v1.0.1
+  K8S_DEPLOYMENT: apuestas-service
+  K8S_CONTAINER: apuestas-service
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Descargar el codigo del repo
+        uses: actions/checkout@v4
+
+      - name: 2. Configurar credenciales de AWS Academy
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 3. Login en Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 4. Construir y subir imagen Docker a ECR
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$REGISTRY/$ECR_REPOSITORY:latest" \
+            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_VERSION" \
+            .
+
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_VERSION"
+
+          echo "IMAGE_URI=$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: 5. Instalar kubectl en el runner
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+
+      - name: 6. Conectar kubectl al cluster EKS
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: 7. Desplegar apuestas-service en EKS
+        run: |
+          kubectl set image deployment/$K8S_DEPLOYMENT $K8S_CONTAINER=$IMAGE_URI
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: 8. Esperar rollout y mostrar resultado
+        run: |
+          kubectl rollout status deployment/$K8S_DEPLOYMENT --timeout=180s
+          kubectl get deployment $K8S_DEPLOYMENT
+          kubectl get svc apuestas-service
+          kubectl get hpa apuestas-service-hpa
+          kubectl get pods -l app=apuestas-service -o wide
