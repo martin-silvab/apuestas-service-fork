@@ -31,10 +31,10 @@ DB_CONFIG = {
 }
 
 # Pool configuration from environment variables.
-# With HPA between 2 and 3 replicas, this allows controlled
-# concurrent access without exhausting PostgreSQL connections.
+# With HPA between 2 and 3 replicas, 30 connections per pod allow
+# the service to absorb the 80-VU load without immediate pool exhaustion.
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
-DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "20"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "30"))
 DB_POOL_WAIT_SECONDS = float(os.getenv("DB_POOL_WAIT_SECONDS", "1.0"))
 DB_POOL_RETRY_INTERVAL_SECONDS = float(
     os.getenv("DB_POOL_RETRY_INTERVAL_SECONDS", "0.02")
