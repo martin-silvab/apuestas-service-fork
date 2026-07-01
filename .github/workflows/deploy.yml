@@ -2,7 +2,7 @@ name: Desplegar apuestas-service en EKS
 
 on:
   push:
-    branches: [ deploy ]
+    branches: [deploy]
   workflow_dispatch:
 
 env:
@@ -33,40 +33,60 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: 4. Construir y subir imagen Docker a ECR
+      - name: 4. Configurar Python para pruebas
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 5. Construir imagen Docker sin publicarla
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          IMAGE_LATEST="$REGISTRY/$ECR_REPOSITORY:latest"
+          IMAGE_VERSION_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_VERSION"
+
           docker build \
-            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-            -t "$REGISTRY/$ECR_REPOSITORY:latest" \
-            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_VERSION" \
+            -t "$IMAGE_URI" \
+            -t "$IMAGE_LATEST" \
+            -t "$IMAGE_VERSION_URI" \
             .
 
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_VERSION"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
+          echo "IMAGE_VERSION_URI=$IMAGE_VERSION_URI" >> "$GITHUB_ENV"
 
-          echo "IMAGE_URI=$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+      - name: 6. Instalar dependencias y ejecutar pruebas unitarias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python tests/test_simulacion.py
+          python tests/test_db_pool.py
 
-      - name: 5. Instalar kubectl en el runner
+      - name: 7. Publicar imagen Docker en ECR
+        run: |
+          docker push "$IMAGE_URI"
+          docker push "$IMAGE_LATEST"
+          docker push "$IMAGE_VERSION_URI"
+
+      - name: 8. Instalar kubectl en el runner
         run: |
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
 
-      - name: 6. Conectar kubectl al cluster EKS
+      - name: 9. Conectar kubectl al cluster EKS
         run: |
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 
-      - name: 7. Desplegar apuestas-service en EKS
+      - name: 10. Desplegar apuestas-service en EKS
         run: |
           kubectl set image deployment/$K8S_DEPLOYMENT $K8S_CONTAINER=$IMAGE_URI
           kubectl apply -f k8s/service.yaml
           kubectl apply -f k8s/hpa.yaml
 
-      - name: 8. Esperar rollout y mostrar resultado
+      - name: 11. Esperar rollout y mostrar resultado
         run: |
           kubectl rollout status deployment/$K8S_DEPLOYMENT --timeout=180s
           kubectl get deployment $K8S_DEPLOYMENT
