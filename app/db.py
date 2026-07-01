@@ -30,6 +30,16 @@ DB_CONFIG = {
     "dbname": os.getenv("DB_NAME", "casino_db"),
 }
 
+# Pool configuration from environment variables.
+# With HPA between 2 and 3 replicas, this allows controlled
+# concurrent access without exhausting PostgreSQL connections.
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "20"))
+DB_POOL_WAIT_SECONDS = float(os.getenv("DB_POOL_WAIT_SECONDS", "1.0"))
+DB_POOL_RETRY_INTERVAL_SECONDS = float(
+    os.getenv("DB_POOL_RETRY_INTERVAL_SECONDS", "0.02")
+)
+
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
@@ -39,7 +49,11 @@ def esperar_bd(max_intentos: int = 30, espera_s: float = 2.0) -> None:
     ultimo_error = None
     for intento in range(1, max_intentos + 1):
         try:
-            _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DB_CONFIG)
+            _pool = psycopg2.pool.ThreadedConnectionPool(
+                DB_POOL_MIN,
+                DB_POOL_MAX,
+                **DB_CONFIG,
+            )
             conn = _pool.getconn()
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
@@ -54,17 +68,37 @@ def esperar_bd(max_intentos: int = 30, espera_s: float = 2.0) -> None:
 
 
 class _Conexion:
-    """Context manager: presta una conexión del pool y la devuelve siempre."""
+    """Borrow a connection from the pool and always return it.
+
+    If the pool is temporarily full, wait briefly for an available
+    connection instead of failing immediately.
+    """
 
     def __enter__(self):
-        self.conn = _pool.getconn()
-        return self.conn
+        if _pool is None:
+            raise RuntimeError("PostgreSQL pool was not initialized")
+
+        deadline = time.monotonic() + DB_POOL_WAIT_SECONDS
+
+        while True:
+            try:
+                self.conn = _pool.getconn()
+                return self.conn
+
+            except psycopg2.pool.PoolError as exc:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "Connection pool exhausted "
+                        f"after waiting {DB_POOL_WAIT_SECONDS}s"
+                    ) from exc
+
+                time.sleep(DB_POOL_RETRY_INTERVAL_SECONDS)
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is not None:
             self.conn.rollback()
-        _pool.putconn(self.conn)
 
+        _pool.putconn(self.conn)
 
 def conexion() -> _Conexion:
     return _Conexion()

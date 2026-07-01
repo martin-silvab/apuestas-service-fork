@@ -1,36 +1,90 @@
-# apuestas-service
+# VidalCasino 2.0 - Apuestas Service
 
-Microservicio de **apuestas deportivas** del casino (FastAPI). Comparte la base de
-datos PostgreSQL y el `JWT_SECRET` con `casino-backend` (no tiene login propio:
-valida el JWT que emite el backend). Lista eventos con cuotas 1X2, registra
-apuestas, **simula** el partido (modelo Poisson) y liquida las apuestas; los
-equipos/escudos se siembran desde thesportsdb.
+Este repositorio contiene el microservicio **apuestas-service** del proyecto VidalCasino 2.0, desarrollado para la evaluación EP3 de Introducción a Herramientas DevOps. Este servicio gestiona eventos deportivos, apuestas realizadas por usuarios y operaciones asociadas a apuestas deportivas.
 
-- Prefijo de rutas: `/api/apuestas` · Docs: `/docs`
+## Descripción general
 
-## Endpoints
-| Método | Ruta | Descripción |
-|---|---|---|
-| GET | `/api/apuestas/eventos` | Eventos abiertos con cuotas y escudos |
-| POST | `/api/apuestas` | Registrar una apuesta (debita saldo) |
-| GET | `/api/apuestas/mis-apuestas` | Apuestas del usuario |
-| POST | `/api/apuestas/eventos/{id}/simular` | Simula y liquida el partido |
-| POST | `/api/apuestas/reiniciar` | Regenera la cartelera |
+`apuestas-service` permite consultar eventos deportivos, realizar apuestas y registrar apuestas asociadas a los usuarios del sistema. Este microservicio se ejecuta dentro del clúster de Kubernetes en Amazon EKS y se mantiene como servicio interno mediante `ClusterIP`.
 
-## Ejecutar en local
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-# variables: copia .env.example a .env y ajústalas
-uvicorn app.main:app --reload --port 8005
-```
-Requiere una PostgreSQL accesible con las tablas compartidas (`usuarios`,
-`transacciones`) que crea `casino-backend`.
+El frontend consume este servicio mediante rutas `/api/apuestas`, sin exponer el microservicio directamente a Internet.
 
-## Entrega (lo que debes implementar)
-1. **Rutas de salud** para Kubernetes (ver el `TODO` en `app/main.py`):
-   *liveness* (¿el proceso vive?) y *readiness* (¿listo para tráfico? verifica la BD, responde 200/503).
-2. **Dockerfile** para contenerizar el servicio.
-3. **Workflow de CI/CD** (GitHub Actions) que construya la imagen, la publique en ECR y despliegue en **EKS**.
-4. **Manifiestos de Kubernetes** (Deployment + Service) con las probes apuntando a tus rutas de salud.
-5. **Pruebas de carga** que evidencien el correcto funcionamiento en EKS (escalado, disponibilidad).
+## Arquitectura del sistema
+
+El sistema VidalCasino está compuesto por:
+
+- **casino-frontend:** interfaz web pública mediante LoadBalancer.
+- **casino-backend:** backend principal interno.
+- **bonos-service:** microservicio de bonos.
+- **apuestas-service:** microservicio de apuestas deportivas.
+- **estadisticas-service:** microservicio de estadísticas.
+- **postgres:** base de datos interna.
+
+## Tecnologías utilizadas
+
+- Python
+- FastAPI
+- PostgreSQL
+- Docker
+- Kubernetes
+- Amazon EKS
+- Amazon ECR
+- GitHub Actions
+- Horizontal Pod Autoscaler
+- AWS Academy Learner Lab
+
+## Endpoints de salud
+
+El servicio incorpora sondas de salud para Kubernetes:
+
+```txt
+/livez
+/readyz
+/livez: verifica que el contenedor se encuentra vivo.
+/readyz: verifica que el servicio puede operar correctamente y conectarse a la base de datos.
+Despliegue en Kubernetes
+
+Los manifiestos se encuentran en:
+
+k8s/
+
+Archivos principales:
+
+k8s/deployment.yaml
+k8s/service.yaml
+k8s/hpa.yaml
+
+El servicio se despliega con 2 réplicas y se expone internamente mediante un Service de tipo ClusterIP en el puerto 8005.
+
+También cuenta con un HorizontalPodAutoscaler que escala el servicio según uso de CPU.
+
+CI/CD
+
+El despliegue automático se encuentra definido en:
+
+.github/workflows/deploy.yml
+
+El workflow se ejecuta al realizar un push sobre la rama deploy.
+
+El pipeline realiza:
+
+Descarga del código.
+Configuración de credenciales de AWS Academy.
+Login en Amazon ECR.
+Construcción de imagen Docker.
+Publicación en ECR con tags latest, v1.0.1 y SHA del commit.
+Conexión con Amazon EKS.
+Actualización del Deployment.
+Verificación del rollout y estado de pods.
+Comandos de verificación
+kubectl get deployment apuestas-service
+kubectl get svc apuestas-service
+kubectl get hpa apuestas-service-hpa
+kubectl get pods -l app=apuestas-service -o wide
+kubectl describe deployment apuestas-service
+Estado esperado
+Deployment disponible con 2 réplicas.
+Service interno tipo ClusterIP.
+HPA activo con objetivo de CPU.
+Pods en estado Running.
+Imagen desplegada desde Amazon ECR.
+CI/CD exitoso en GitHub Actions.
